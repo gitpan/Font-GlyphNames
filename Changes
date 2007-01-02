@@ -1,0 +1,9 @@
+Revision history for Font::GlyphNames
+
+.01  31 December, 2006
+     I forgot to include a MANIFEST file, and then ran 'make dist' and
+     uploaded an empty file to CPAN! Duh!
+
+.02  1 January, 2007
+     Pre-alpha version. Only the name2str function has been imple-
+     mented. It has a very minor bug.

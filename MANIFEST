@@ -1,0 +1,9 @@
+Changes
+lib/Font/GlyphNames/glyphlist.txt
+lib/Font/GlyphNames/zapfdingbats.txt
+lib/Font/GlyphNames.pm
+Makefile.PL
+MANIFEST
+META.yml
+README
+t/test.t
