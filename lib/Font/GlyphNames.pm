@@ -9,26 +9,28 @@ use Encode 'decode';
 
 require Exporter;
 
-our($VERSION)   =  0.02;
+our($VERSION)   =  0.03;
 our(@ISA)       = 'Exporter';
 our(@EXPORT_OK) = qw[
 	name2str
-	name2code
+	name2ord
 	str2name
-	code2name
-	code2ligname
+	ord2name
+	ord2ligname
 ];
+our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
 our $_obj;  # object used by the function-oriented interface
 our @LISTS = qw[ zapfdingbats.txt
                  glyphlist.txt   ];
 our @PATH  = split /::/, __PACKAGE__;
-# our $NULL = ''; # ~~~ to be implemented
 
 use subs qw[
 	_read_glyphlist
 ];
 
+
+=encoding utf-8
 
 =head1 NAME
 
@@ -36,7 +38,7 @@ Font::GlyphNames - Convert between glyph names and characters
 
 =head1 VERSION
 
-Version .02
+Version .03
 
 B<WARNING:> This is a pre-alpha release. The API is subject to change 
 without
@@ -48,17 +50,19 @@ yet been implemented.
 
   use Font::GlyphNames qw[
                            name2str
-                           name2code
+                           name2ord
                            str2name
-                           code2name
-                           code2ligname
+                           ord2name
+                           ord2ligname
                          ];
+  # or:
+  use Font::GlyphNames ':all';
   
-  name2str qw[one two three s_t Psi uni00D4];
-  # name2code    qw[one two three s_t Psi uni00D4]
-  # str2name     qw[1 2 3 st E<0x3A8> E<Ocirc>];
-  # code2name    qw[49 50 51 115 116 936 212];
-  # code2ligname qw[49 50 51 115 116 936 212];
+  name2str     qw[one two three s_t Psi uni00D4];
+  name2ord     qw[one two three s_t Psi uni00D4];
+  str2name     qw[1 2 3 st Ψ Ô];
+  ord2name     qw[49 50 51 115 116 936 212];
+  ord2ligname qw[49 50 51 115 116 936 212];
 
   # Or you can use the OO interface:
   
@@ -67,7 +71,7 @@ yet been implemented.
   $gn = new Font::GlyphNames; # use default glyph list
   $gn = new Font::GlyphNames 'my-glyphs.txt'; # custom list
 
-  $gn->name2code(qw[ a slong_slong_i s_t.alt ]);
+  $gn->name2ord(qw[ a slong_slong_i s_t.alt ]);
   # etc.
   
 =head1 DESCRIPTION
@@ -93,60 +97,131 @@ list of files to use as a glyph list. If LIST is
 omitted, the Zapf Dingbats Glyph List and the Adobe
 Glyph List (see L<SEE ALSO>) will be used instead.
 
+=item new \%options
+
+C<new> can also take a hashref of options, which are as follows:
+
+=over 4
+
+=item lists
+
+=item list
+
+(You can specify it with or without the 's'.) Either the name of the file
+containing the glyph list, or a reference to an array of file names. In
+fact, if you want an object with no glyph list (not that you would), you
+can use S<C<< lists => [] >>>.
+
+=item search_inc
+
+If this is set to true, 'Font/GlyphNames/' will be added to the beginning
+of each file name, and the files will then be searched for in the folders
+listed in C<@INC>.
+
+=item substitute
+
+Set this to a string that you want C<name2str> to output for each invalid
+glyph name. The default is C<undef>. (Actually, it doesn't have to be a 
+string; it could be anything, but it will be stringified if C<name2str> is
+called in scalar context with more than one argument.)
+
+=back
+
 =cut
 
-# ~~~ I need to make it so that new() takes two types of arg lists:
-# 1)   new( FILES )
-# 2)   new( { lists => \@files, search_inc => 1 } )
-#   or new( { list => $file,    search_inc => 1 } )
-#
-# If list and lists are both specified, it will be understood as
-# lists => [@$lists, $list]
-
 sub new {
-	my($class, $self, $search_inc) = (shift || __PACKAGE__, {});
-	my @lists = @_ ? @_ : @{$search_inc = 1, \@LISTS};
-
-	# read the glyph list(s) into $$self{name2code};
-	$$self{name2code} = {};
-	eval { for (reverse @lists) {
-		%{$$self{name2code}} = (
-		    %{$$self{name2code}},
-		    %{ _read_glyphlist $_, {search_inc => $search_inc} }
-		);
-	}};
-	return if $@ ne '';
-	
-	# create the reverse mapping in $$self{code2name}
-	for (keys %{$$self{name2code}}) {
-		$$self{code2name}{$$self{name2code}{$_}[0]} = $_
-		unless @{$$self{name2code}{$_}} > 1 or
-		    exists $$self{code2name}{$$self{name2code}{$_}[0]};
+	my($class, $self, $search_inc) = (@_ ? shift : __PACKAGE__, {});
+	my(@lists,$found_list);
+	if(@_ and ref $_[0] eq 'HASH') {
+		for (qw 'lists list') {
+			next unless exists $_[0]{$_};
+			++$found_list;
+			push @lists, ref $_[0]{$_} eq 'ARRAY'
+				? @{$_[0]{$_}}
+				: $_[0]{$_};
+		}
+		$search_inc = delete $_[0]{search_inc} if $found_list;
+		$$self{subst} = delete $_[0]{substitute};
 	}
-	# ~~~ The reverse mapping needs to support ligatures:
-	# $$self{code2name}{'05D3_05B2'} = 'dalethatafpatah';
+	elsif(@_) {
+		$found_list++;
+		@lists = @_;
+	}
+	unless($found_list) {
+		@lists = @{$search_inc = 1, \@LISTS};
+	}
 
+	# read the glyph list(s) into $self;
+	$$self{name2ord} = {};
+	$$self{str2name} = {};
+	for my $file (@lists) {
+		my(@h,$fh);
+	
+		if($search_inc) {
+			my $f;
+			# I pilfered this code from  Unicode::Collate  (and
+			# modified it slightly).
+			for (@INC) { 
+				$f = catfile $_, @PATH, $file;
+				last if open $fh, $f;
+				$f = undef;
+			}
+			defined $f or
+				$@ = __PACKAGE__ . ": Can't locate " .
+				    catfile(@PATH, $file) .
+				    " in \@INC (\@INC contains @INC).\n",
+				return
+		}
+		else {
+			open $fh, $file
+			    or $@= "$file could not be opened: $!",
+			       return
+		}
+	
+		local *_;
+		my $line; for ($line) {
+		while (<$fh>) {
+			next if /^\s*(?:#|\z)/;
+			s/^\cj//; # for Mac Classic compatibility
+			/^([^;]+);\s*([0-9a-f][0-9a-f\s]+)\z/i
+			  or $@ = "Invalid glyph list line in $file: $_",
+			     return;
+			my($name,$codes) = ($1,[map hex, split ' ', $2]);
+			exists $$self{name2ord}{$name} or
+				$$self{name2ord}{$name} = $codes;
+			if(@$codes == 1) {
+				my $key = chr $$codes[0];
+				exists $$self{str2name}{$key} or 
+				    $$self{str2name}{$key} = $name;
+			} else {
+				my $key = join '', map chr, @$codes;
+				exists $$self{str2name}{$key}
+					or $$self{str2name}{$key} = $name
+			}
+		}}
+	}
+	$ @= '';
+	
 	bless $self, $class;
 }
 
 =item name2str ( LIST )
 
 LIST is a list of glyph names. This function returns a list of the
-string equivalents of the glyphs in list context, or the string
-equivalent of the I<last> item in scalar context. Invalid glyph
+string equivalents of the glyphs in list context. In scalar context the
+individual elements of the list are concatenated. Invalid glyph
 names and names beginning with a dot (chr 0x2E) produce undef. Some 
-examples (in
-list context):
+examples:
 
   name2str   's_t'             # returns 'st'
   name2str qw/Psi uni00D4/     # returns ("\x{3a8}", "\xd4")
   name2str   '.notdef'         # returns undef
   name2str   'uni12345678'     # returns "\x{1234}\x{5678}"
-  name2str qw/one uni32 three/ # returns ('one', undef, 'three')
+  name2str qw/one uni32 three/ # returns ('1', undef, '3')
 
 If, for invalid glyph names, you would like something other than undef 
-(the null char, for instance), you can replace it afterwards easily 
-enough:
+(the null char, for instance), you can either use the OO interface and the
+C<substitute> option to L</new>, or replace it afterwards like this:
 
   map +("\0",$_)[defined], name2str ...
 
@@ -160,45 +235,235 @@ sub name2str {
 		$str = undef;
 		for (split /_/) {
 			# Here we check each type of glyph name
-			if (exists $$self{name2code}{$_}) {
+			if (exists $$self{name2ord}{$_}) {
 				$str .= join '', map chr, 
-					@{$$self{name2code}{$_}};
+					@{$$self{name2ord}{$_}};
 			}
 			elsif (/^uni( 
 				  (?: #non-surrogate codepoints:
-				    [\dA-CEF][\dA-F]{3}
+				    [0-9A-CEF][0-9A-F]{3}
 				      |
-				    D[0-7][\dA-F]{2}
+				    D[0-7][0-9A-F]{2}
 				  )+
 				)\z/x) {
 				$str .= decode 'UTF-16BE', pack 'H*', $1;
 			}
 			elsif (/^u(
-				  [\dA-CEF][\dA-F]{3}
+				  0{0,2}[0-9A-CEF][0-9A-F]{3}
 				    |	
-				  D[0-7][\dA-F]{2}
+				  0{0,2}D[0-7][0-9A-F]{2}
 				    |
-				  [\dA-F]{5,6}
+				  (?:0?(?!0)|1(?=0))[0-9A-F]{5}
 				)\z/x) {
 				$str .= chr hex $1;
 			}
-			# no else necessary because $str is already undef
+			else {
+				no warnings 'uninitialized';
+				defined $str ? $str .= $$self{subst} :
+				              ($str  = $$self{subst});
+			}
 		}
-		push @ret, $str;
+		push @ret, defined $str ? $str : $$self{subst};
 	}
-	wantarray ? @ret : $ret[-1];
+	no warnings 'uninitialized';
+	wantarray ? @ret : @ret > 1 ? join '', @ret : $ret[-1];
 }
 
 
-=item name2code ( LIST )
+=item name2ord ( LIST )
+
+LIST is a list of glyph names. This function returns a list of the
+characters codes that the glyphs represent. If called in scalar context
+with more than one argument, the behaviour is undefined (and subject to
+change in future releases). Invalid glyph
+names and names beginning with a dot (chr 0x2E) produce -1. Some 
+examples:
+
+  name2ord   's_t'             # returns 115, 116
+  name2ord qw/Psi uni00D4/     # returns 0x3a8, 0xd4
+  name2ord   '.notdef'         # returns -1
+  name2ord   'uni12345678'     # returns 0x1234, 0x5678
+  name2ord qw/one uni32 three/ # returns 49, -1, 51
+
+=cut
+
+sub name2ord {
+	my $self = &_get_self;
+	my(@names,@ret) = @_;
+	for(@names) {
+		s/\..*//s;
+		$_ = ' ' unless $_; # make sure split returns something
+		for (split /_/) {
+			# Here we check each type of glyph name
+			# It would be nice to avoid duplicating this logic,
+			# but I think it runs faster this way.
+			if (exists $$self{name2ord}{$_}) {
+				push @ret, @{$$self{name2ord}{$_}};
+			}
+			elsif (/^uni( 
+				  (?: #non-surrogate codepoints:
+				    [0-9A-CEF][0-9A-F]{3}
+				      |
+				    D[0-7][0-9A-F]{2}
+				  )+
+				)\z/x) {
+				push @ret, unpack 'n*', pack 'H*', $1;
+			}
+			elsif (/^u(
+				  0{0,2}[0-9A-CEF][0-9A-F]{3}
+				    |	
+				  0{0,2}D[0-7][0-9A-F]{2}
+				    |
+				  (?:0?(?!0)|1(?=0))[0-9A-F]{5}
+				)\z/x) {
+				push @ret, hex $1;
+			}
+			else {
+				push @ret, -1;
+			}
+		}
+	}
+	@ret == 1 ? $ret[-1] : @ret ;
+}
+
 
 =item str2name ( LIST )
 
-=item code2name ( LIST )
+LIST is a list of strings. This function returns a list of glyph names that
+correspond to all the arguments passed to it. If a string is more that one
+character long, the resulting glyph name will be a ligature name. An empty
+string will return '.notdef'. If called
+in scalar context
+with more than one argument, the behaviour is undefined (and subject to
+change in future releases).
 
-=item code2ligname ( LIST )
+  str2name 'st'               # returns   's_t'
+  str2name "\x{3a8}", "\xd4"  # returns qw/Psi Ocircumflex/
+  str2name "\x{3a8}\xd4"      # returns   'Psi_Ocircumflex'
+  str2name "\x{1234}\x{5678}" # returns   'uni12345678'
+  str2name "\x{05D3}\x{05B9}" # returns   'daletholam'
 
-These have yet to be implemented.
+=cut
+
+sub str2name {
+	my $self = &_get_self;
+	my(@strs,@ret) = @_;
+	my $map = $$self{str2name};
+	for(@strs) {
+		if(length > 1) {
+			if (exists $$map{$_}) {
+				push @ret, $$map{$_};
+			}else{
+				my @components;
+				my $uni_component; # whether the previous
+				for(split //) {    # component was a ‘uni-’
+					if (exists $$map{$_}){
+						push @components,
+							$$map{$_} ;
+						$uni_component =0;
+					} elsif((my $ord = ord) > 0xffff) {
+						push @components,
+							sprintf "u%X",$ord;
+						$uni_component =0;
+					} elsif($uni_component) {
+						$components[-1] .=
+							sprintf"%04X",ord;
+					} else {
+						push @components,
+							sprintf"uni%04X",
+								ord;
+						++$uni_component;
+					}
+				}
+				push @ret, join '_', @components;
+			}
+		}
+		elsif(length) {
+			my $ord = ord;
+			push @ret, exists $$map{$_}
+				? $$map{$_}
+				:  sprintf $ord > 0xffff ?"u%X":"uni%04X",
+					$ord;
+		}else { push @ret, '.notdef' }
+	}
+	@ret == 1 ? $ret[-1] : @ret ;
+}
+
+
+=item ord2name ( LIST )
+
+LIST is a list of character codes. This function returns a list of glyph
+names that
+correspond to all the arguments passed to it. If called
+in scalar context
+with more than one argument, the behaviour is undefined (and subject to
+change in future releases).
+
+  ord2name 115            # returns 's'
+  ord2name 0x3a8, 0xd4    # returns 'Psi', 'Ocircumflex'
+  ord2name 0x1234, 0x5678 # returns 'uni1234', 'uni5678'
+
+=cut
+
+sub ord2name {
+	my $self = &_get_self;
+	my(@codes,@ret) = @_;
+	my $map = $$self{str2name};
+	for(@codes) {
+		my $char = chr;
+		push @ret, exists $$map{$char}
+			? $$map{$char}
+			:  sprintf $_ > 0xffff ?"u%X":"uni%04X",
+				$_;
+	}
+	@ret == 1 ? $ret[-1] : @ret ;
+}
+
+
+=item ord2ligname ( LIST )
+
+LIST is a list of character codes. This function returns a glyph
+name for a ligature that
+corresponds to the arguments passed to it, or '.notdef' if there are none.
+
+  ord2ligname 115, 116       # returns 's_t'
+  ord2ligname 0x3a8, 0xd4    # returns 'Psi_Ocircumflex'
+  ord2ligname 0x1234, 0x5678 # returns 'uni12345678'
+  ord2ligname 0x05D3, 0x05B9 # returns 'daletholam'
+
+=cut
+
+sub ord2ligname {
+	my $self = &_get_self;
+	my(@codes) = @_;
+	my $map = $$self{str2name};
+	my $str = join '', map chr, @codes;
+	exists $$map{$str} and return $$map{$str};
+	my @components;
+	my $uni_component; # whether the previous
+	for(@codes) {      # component was a ‘uni-’
+		my $char = chr;
+		if (exists $$map{$char}){
+			push @components,
+				$$map{$char} ;
+			$uni_component =0;
+		} elsif( $_ > 0xffff ) {
+			push @components,
+				sprintf "u%X",$_;
+			$uni_component =0;
+		} elsif($uni_component) {
+			$components[-1] .=
+				sprintf"%04X",$_;
+		} else {
+			push @components,
+				sprintf"uni%04X",
+					$_;
+			++$uni_component;
+		}
+	}
+	return @components ? join '_', @components : '.notdef';
+}
+
 
 =back
 
@@ -207,42 +472,7 @@ These have yet to be implemented.
 
 
 
-#----------- PRIVATE SUBROUTINES ---------------#
-
-# _read_glyphlist(filename, { search_inc => bool} ) reads a glyph list
-# file and returns a hashref like
-# this: { glyphname => charcode, glyphname => charcode, ... }
-
-sub _read_glyphlist {
-	my($file, $opts) = @_;
-	my(%h,$fh);
-	
-	if($$opts{search_inc}) {
-		my $f;
-		# I pilfered this code from  Unicode::Collate  (and
-		# modified it slightly).
-		for (@INC) { 
-			$f = catfile $_, @PATH, $file;
-			last if open $fh, $f;
-			$f = undef;
-		}
-		defined $f or die "$f cannot be found in \@INC (\@INC contains @INC).";
-	}
-	else {
-		open $fh, $file or die "$file could not be opened: $!";
-	}
-	
-	my $line; for ($line) {
-	while (<$fh>) {
-		next if /^\s*(?:#|\z)/;
-		s/^\cj//; # for Mac Classic compatibility
-		/^([^;]+);\s*([\da-f][\da-f\s]+)\z/i
-			or die "Invalid glyph list line in $file: $_ ";
-		$h{$1} = [map hex, split ' ', $2];
-	}}
-	\%h;
-}
-
+#----------- A PRIVATE SUBROUTINE ---------------#
 
 # _get_self helps the methods act as functions as well.
 # Each function should call it thusly:
@@ -292,16 +522,11 @@ Windows, MacPerl, and any Unix flavour, I have only tested it in perl
 
 =head1 BUGS
 
-C<name2str> does not properly validate glyph names consisting of "u"
-followed by five or six hex digits. Specifically, it lets surrogates
-(such as u0D800) and characters above U+10FFFF (e.g., u120000)
-through.
+Please e-mail me if you find any.
 
-Please e-mail me if you find any other bugs.
+=head1 AUTHOR & COPYRIGHT
 
-=head1 AUTHOR
-
-Father Chrysostomos <join '', name2str qw[s p r o u t at c p a n
+Copyright (C) 2006-8, Father Chrysostomos <name2str qw[s p r o u t at c p a n
 period o r g]>
 
 =head1 SEE ALSO
