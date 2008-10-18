@@ -131,7 +131,8 @@ is_deeply [$gn->name2str(qw<bill bob ChiRo snip-snip>)], ["\x{2603}","\x{3020}",
 
 new Font::GlyphNames { search_inc => 1, list => 'bad file' };
 like $@,
-    qr-^Font::GlyphNames: Can't locate Font/GlyphNames/bad file in \@INC-,
+    qr-^Font::GlyphNames:\ Can't\ locate\ .*?Font.*?GlyphNames.*?bad\ file
+       .*?\ in\ \@INC-x,
 	'$@ after a glyph list is not found in @INC';
 	# during development the file name was not making it into the msg
 

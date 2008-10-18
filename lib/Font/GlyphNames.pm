@@ -38,13 +38,7 @@ Font::GlyphNames - Convert between glyph names and characters
 
 =head1 VERSION
 
-Version .03
-
-B<WARNING:> This is a pre-alpha release. The API is subject to change 
-without
-notice. Some of the features (those
-commented out in the synopsis) have not
-yet been implemented.
+Version .03 (beta)
 
 =head1 SYNOPSIS
 
@@ -62,7 +56,7 @@ yet been implemented.
   name2ord     qw[one two three s_t Psi uni00D4];
   str2name     qw[1 2 3 st Ψ Ô];
   ord2name     qw[49 50 51 115 116 936 212];
-  ord2ligname qw[49 50 51 115 116 936 212];
+  ord2ligname  qw[49 50 51 115 116 936 212];
 
   # Or you can use the OO interface:
   
