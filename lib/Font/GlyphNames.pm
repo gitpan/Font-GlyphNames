@@ -9,7 +9,7 @@ use Encode 'decode';
 
 require Exporter;
 
-our($VERSION)   =  0.03;
+our($VERSION)   = '1.00000';
 our(@ISA)       = 'Exporter';
 our(@EXPORT_OK) = qw[
 	name2str
@@ -38,7 +38,7 @@ Font::GlyphNames - Convert between glyph names and characters
 
 =head1 VERSION
 
-Version .03 (beta)
+Version 1.00000
 
 =head1 SYNOPSIS
 
@@ -267,7 +267,7 @@ sub name2str {
 =item name2ord ( LIST )
 
 LIST is a list of glyph names. This function returns a list of the
-characters codes that the glyphs represent. If called in scalar context
+character codes that the glyphs represent. If called in scalar context
 with more than one argument, the behaviour is undefined (and subject to
 change in future releases). Invalid glyph
 names and names beginning with a dot (chr 0x2E) produce -1. Some 
@@ -324,7 +324,7 @@ sub name2ord {
 =item str2name ( LIST )
 
 LIST is a list of strings. This function returns a list of glyph names that
-correspond to all the arguments passed to it. If a string is more that one
+correspond to all the arguments passed to it. If a string is more than one
 character long, the resulting glyph name will be a ligature name. An empty
 string will return '.notdef'. If called
 in scalar context
@@ -510,9 +510,7 @@ used.
 
 =head1 COMPATIBILITY
 
-This module requires perl 5.8.0 or later. Though it should work in
-Windows, MacPerl, and any Unix flavour, I have only tested it in perl
-5.8.6 on Mac OS X 10.4 (Darwin 8).
+This module requires perl 5.8.0 or later.
 
 =head1 BUGS
 
